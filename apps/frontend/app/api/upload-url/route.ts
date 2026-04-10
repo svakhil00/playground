@@ -51,6 +51,14 @@ export async function GET() {
   const bucket = process.env.S3_BUCKET_NAME
   const region = process.env.S3_REGION ?? process.env.AWS_REGION
   if (!bucket || !region) {
+    const presentEnvKeys = Object.keys(process.env)
+      .filter((k) => k.startsWith("S3_"))
+      .sort()
+    console.log("[api/upload-url] missing env", {
+      hasBucket: Boolean(bucket),
+      hasRegion: Boolean(region),
+      presentEnvKeys,
+    })
     const missing: string[] = []
     if (!bucket) missing.push("S3_BUCKET_NAME")
     if (!process.env.S3_REGION && !process.env.AWS_REGION) missing.push("S3_REGION")
@@ -58,6 +66,7 @@ export async function GET() {
       {
         error: "Missing required environment variables",
         missing,
+        present_env_keys: presentEnvKeys,
         expected_in_amplify: [
           "S3_BUCKET_NAME",
           "S3_REGION",
