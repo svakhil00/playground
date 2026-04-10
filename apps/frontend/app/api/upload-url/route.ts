@@ -12,14 +12,21 @@ function s3ClientConfig(region: string): S3ClientConfig {
     requestChecksumCalculation: "WHEN_REQUIRED",
   }
 
-  const key = process.env.AWS_ACCESS_KEY_ID
-  const secret = process.env.AWS_SECRET_ACCESS_KEY
-  if (key && secret) {
+  // Amplify reserves the AWS_* prefix for env vars; use S3_* in hosting and
+  // keep AWS_* as fallback for local ~/.aws / .env.local.
+  const accessKeyId =
+    process.env.S3_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID
+  const secretAccessKey =
+    process.env.S3_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY
+  if (accessKeyId && secretAccessKey) {
     config.credentials = {
-      accessKeyId: key,
-      secretAccessKey: secret,
-      ...(process.env.AWS_SESSION_TOKEN
-        ? { sessionToken: process.env.AWS_SESSION_TOKEN }
+      accessKeyId,
+      secretAccessKey,
+      ...((process.env.S3_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN)
+        ? {
+            sessionToken:
+              process.env.S3_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN,
+          }
         : {}),
     }
   }
@@ -29,10 +36,10 @@ function s3ClientConfig(region: string): S3ClientConfig {
 
 export async function GET() {
   const bucket = process.env.S3_BUCKET_NAME
-  const region = process.env.AWS_REGION
+  const region = process.env.S3_REGION ?? process.env.AWS_REGION
   if (!bucket || !region) {
     return NextResponse.json(
-      { error: "Missing S3_BUCKET_NAME or AWS_REGION" },
+      { error: "Missing S3_BUCKET_NAME or S3_REGION (or AWS_REGION for local)" },
       { status: 500 }
     )
   }
@@ -54,7 +61,7 @@ export async function GET() {
       url.includes("x-amz-sdk-checksum-algorithm")
     ) {
       console.error(
-        "[api/upload-url] Presigned URL still contains checksum params. Set AWS_REQUEST_CHECKSUM_CALCULATION=when_required in the deployment environment."
+        "[api/upload-url] Presigned URL still contains checksum params (SDK default checksum mode)."
       )
     }
 
