@@ -4,6 +4,10 @@ import { NextResponse } from "next/server"
 
 export const runtime = "nodejs"
 
+/** Last-resort defaults when env is not set (e.g. Amplify compute). Prefer env in real deployments. */
+const DEFAULT_S3_BUCKET = "file-upload"
+const DEFAULT_S3_REGION = "us-east-1"
+
 function errorToJson(err: unknown): Record<string, unknown> {
   if (err instanceof Error) {
     return {
@@ -48,34 +52,31 @@ function s3ClientConfig(region: string): S3ClientConfig {
 }
 
 export async function GET() {
-  const bucket = process.env.S3_BUCKET_NAME
-  const region = process.env.S3_REGION ?? process.env.AWS_REGION
-  if (!bucket || !region) {
-    const presentEnvKeys = Object.keys(process.env)
-      .filter((k) => k.startsWith("S3_"))
-      .sort()
-    console.log("[api/upload-url] missing env", {
-      hasBucket: Boolean(bucket),
-      hasRegion: Boolean(region),
-      presentEnvKeys,
-    })
-    const missing: string[] = []
-    if (!bucket) missing.push("S3_BUCKET_NAME")
-    if (!process.env.S3_REGION && !process.env.AWS_REGION) missing.push("S3_REGION")
-    return NextResponse.json(
-      {
-        error: "Missing required environment variables",
-        missing,
-        present_env_keys: presentEnvKeys,
-        expected_in_amplify: [
-          "S3_BUCKET_NAME",
-          "S3_REGION",
-          "S3_ACCESS_KEY_ID",
-          "S3_SECRET_ACCESS_KEY",
-          "S3_UPLOAD_PREFIX (optional)",
-        ],
-      },
-      { status: 500 }
+  const bucket =
+    process.env.S3_BUCKET_NAME?.trim() ||
+    process.env.NEXT_PUBLIC_S3_BUCKET_NAME?.trim() ||
+    DEFAULT_S3_BUCKET
+  const region =
+    process.env.S3_REGION?.trim() ||
+    process.env.NEXT_PUBLIC_S3_REGION?.trim() ||
+    process.env.AWS_REGION?.trim() ||
+    DEFAULT_S3_REGION
+
+  if (
+    !process.env.S3_BUCKET_NAME?.trim() &&
+    !process.env.NEXT_PUBLIC_S3_BUCKET_NAME?.trim()
+  ) {
+    console.warn(
+      `[api/upload-url] using DEFAULT_S3_BUCKET=${DEFAULT_S3_BUCKET} (set S3_BUCKET_NAME to override)`
+    )
+  }
+  if (
+    !process.env.S3_REGION?.trim() &&
+    !process.env.NEXT_PUBLIC_S3_REGION?.trim() &&
+    !process.env.AWS_REGION?.trim()
+  ) {
+    console.warn(
+      `[api/upload-url] using DEFAULT_S3_REGION=${DEFAULT_S3_REGION} (set S3_REGION to override)`
     )
   }
 
