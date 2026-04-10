@@ -4,6 +4,19 @@ import { NextResponse } from "next/server"
 
 export const runtime = "nodejs"
 
+function errorToJson(err: unknown): Record<string, unknown> {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      // Some AWS errors include extra fields (metadata, $fault, etc.)
+      ...(err as unknown as Record<string, unknown>),
+    }
+  }
+  if (typeof err === "object" && err !== null) return err as Record<string, unknown>
+  return { message: String(err) }
+}
+
 function s3ClientConfig(region: string): S3ClientConfig {
   const config: S3ClientConfig = {
     region,
@@ -38,8 +51,21 @@ export async function GET() {
   const bucket = process.env.S3_BUCKET_NAME
   const region = process.env.S3_REGION ?? process.env.AWS_REGION
   if (!bucket || !region) {
+    const missing: string[] = []
+    if (!bucket) missing.push("S3_BUCKET_NAME")
+    if (!process.env.S3_REGION && !process.env.AWS_REGION) missing.push("S3_REGION")
     return NextResponse.json(
-      { error: "Missing S3_BUCKET_NAME or S3_REGION (or AWS_REGION for local)" },
+      {
+        error: "Missing required environment variables",
+        missing,
+        expected_in_amplify: [
+          "S3_BUCKET_NAME",
+          "S3_REGION",
+          "S3_ACCESS_KEY_ID",
+          "S3_SECRET_ACCESS_KEY",
+          "S3_UPLOAD_PREFIX (optional)",
+        ],
+      },
       { status: 500 }
     )
   }
@@ -68,6 +94,12 @@ export async function GET() {
     return Response.json({ url, key })
   } catch (err) {
     console.error("[api/upload-url]", err)
-    return NextResponse.json({ error: "Could not create upload URL" }, { status: 502 })
+    return NextResponse.json(
+      {
+        error: "Could not create upload URL",
+        details: errorToJson(err),
+      },
+      { status: 502 }
+    )
   }
 }
