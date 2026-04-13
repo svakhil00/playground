@@ -1,0 +1,2 @@
+# No extra dependencies required.
+# This Lambda uses AWS Comprehend via boto3 (already included in the Lambda runtime).

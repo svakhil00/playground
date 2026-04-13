@@ -26,6 +26,29 @@ Resources:
             Path: /hello
             Method: get
 
+  AnonymizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: anonymizer/
+      Handler: app.lambda_handler
+      Runtime: python3.14
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 512
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - comprehend:DetectPiiEntities
+              Resource: "*"
+      Events:
+        AnonymizeApi:
+          Type: Api
+          Properties:
+            Path: /anonymize
+            Method: post
+
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM
@@ -39,3 +62,12 @@ Outputs:
   HelloWorldFunctionIamRole:
     Description: "Implicit IAM Role created for Hello World function"
     Value: !GetAtt HelloWorldFunctionRole.Arn
+  AnonymizerApi:
+    Description: "API Gateway POST /anonymize for Anonymizer function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/anonymize"
+  AnonymizerFunction:
+    Description: "Anonymizer Lambda Function ARN"
+    Value: !GetAtt AnonymizerFunction.Arn
+  AnonymizerFunctionIamRole:
+    Description: "Implicit IAM Role created for Anonymizer function"
+    Value: !GetAtt AnonymizerFunctionRole.Arn
