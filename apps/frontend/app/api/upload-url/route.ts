@@ -1,12 +1,20 @@
 import { PutObjectCommand, S3Client, type S3ClientConfig } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
-import { NextResponse } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
 
 export const runtime = "nodejs"
 
 /** Last-resort defaults when env is not set (e.g. Amplify compute). Prefer env in real deployments. */
 const DEFAULT_S3_BUCKET = "file-upload"
 const DEFAULT_S3_REGION = "us-east-1"
+
+function safeFileName(name: string): string {
+  const base = name.replace(/^.*[/\\]/, "").replace(/\0/g, "").slice(0, 255)
+  if (!base || base === "." || base === "..") return "upload.txt"
+  const lower = base.toLowerCase()
+  if (lower.endsWith(".txt") || lower.endsWith(".rtf")) return base
+  return `${base}.txt`
+}
 
 function errorToJson(err: unknown): Record<string, unknown> {
   if (err instanceof Error) {
@@ -51,7 +59,23 @@ function s3ClientConfig(region: string): S3ClientConfig {
   return config
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const jobId = request.nextUrl.searchParams.get("jobId")?.trim()
+  if (!jobId) {
+    return NextResponse.json(
+      { error: "jobId query parameter is required" },
+      { status: 400 }
+    )
+  }
+
+  const fileId = request.nextUrl.searchParams.get("fileId")?.trim()
+  if (!fileId) {
+    return NextResponse.json(
+      { error: "fileId query parameter is required" },
+      { status: 400 }
+    )
+  }
+
   const bucket =
     process.env.S3_BUCKET_NAME?.trim() ||
     process.env.NEXT_PUBLIC_S3_BUCKET_NAME?.trim() ||
@@ -81,7 +105,10 @@ export async function GET() {
   }
 
   const prefix = (process.env.S3_UPLOAD_PREFIX ?? "uploads").replace(/^\/+|\/+$/g, "")
-  const key = `${prefix}/${Date.now()}-${crypto.randomUUID()}`
+  const rawName =
+    request.nextUrl.searchParams.get("fileName")?.trim() || "upload.txt"
+  const name = safeFileName(rawName)
+  const key = `${prefix}/${jobId}/${fileId}/${name}`
 
   const s3 = new S3Client(s3ClientConfig(region))
 
@@ -101,9 +128,21 @@ export async function GET() {
       )
     }
 
-    return Response.json({ url, key })
+    return Response.json({ url, key, bucket })
   } catch (err) {
     console.error("[api/upload-url]", err)
+    const name = err instanceof Error ? err.name : ""
+    if (name === "CredentialsProviderError") {
+      return NextResponse.json(
+        {
+          error: "Could not load AWS credentials",
+          hint:
+            "Add S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY to Amplify environment (secrets), or grant the Amplify service role s3:PutObject on your bucket prefix.",
+          details: errorToJson(err),
+        },
+        { status: 503 }
+      )
+    }
     return NextResponse.json(
       {
         error: "Could not create upload URL",
