@@ -1,5 +1,0 @@
-{
-  "$schema": "https://turbo.build/schema.json",
-  "globalEnv": ["ANONYMIZER_LAMBDA_FUNCTION_NAME"]
-}
-
