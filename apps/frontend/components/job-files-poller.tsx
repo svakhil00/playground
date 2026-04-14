@@ -53,15 +53,20 @@ function applyReverts(text: string, replacements: Replacement[], revertedKeys: S
   return out
 }
 
+type HoverState = {
+  r: Replacement
+  x: number
+  y: number
+} | null
+
 function renderHighlightedText(
   text: string,
   replacements: Replacement[],
-  revertedKeys: Set<string>,
-  onToggle: (r: Replacement) => void
+  revealedKeys: Set<string>,
+  onHover: (next: HoverState) => void,
+  onToggleReveal: (r: Replacement) => void
 ): React.ReactNode {
-  const active = replacements
-    .filter((r) => r.replacement && r.original)
-    .filter((r) => !revertedKeys.has(pairKey(r)))
+  const active = replacements.filter((r) => r.replacement && r.original)
 
   const uniq = Array.from(
     new Set(active.map((r) => r.replacement as string))
@@ -75,37 +80,29 @@ function renderHighlightedText(
   return parts.map((part, idx) => {
     const r = active.find((x) => x.replacement === part)
     if (!r) return <React.Fragment key={idx}>{part}</React.Fragment>
+    const key = pairKey(r)
+    const shown = revealedKeys.has(key) ? (r.original ?? part) : part
     return (
-      <span key={idx} className="group relative">
-        <mark className="rounded-sm bg-yellow-200 px-0.5 text-foreground dark:bg-yellow-500/30">
-          {part}
-        </mark>
-        <span className="pointer-events-none absolute left-0 top-full z-10 mt-2 hidden w-72 rounded-md border border-border bg-popover p-3 text-left text-xs text-popover-foreground shadow-md group-hover:block">
-          <span className="mb-2 block">
-            <span className="font-medium">Original:</span>{" "}
-            <span className="font-mono">{String(r.original)}</span>
-          </span>
-          <span className="mb-3 block">
-            <span className="font-medium">Replacement:</span>{" "}
-            <span className="font-mono">{String(r.replacement)}</span>
-          </span>
-          <span className="block text-[11px] text-muted-foreground">
-            Click to revert this token.
-          </span>
-        </span>
-        <button
-          type="button"
-          className="sr-only"
-          onClick={() => onToggle(r)}
+      <span
+        key={idx}
+        onMouseEnter={(e) => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          onHover({ r, x: rect.left, y: rect.bottom })
+        }}
+        onMouseLeave={() => onHover(null)}
+        onClick={() => onToggleReveal(r)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") onToggleReveal(r)
+        }}
+        className="cursor-pointer"
+      >
+        <mark
+          className="rounded-sm bg-yellow-200 px-0.5 text-foreground dark:bg-yellow-500/30"
         >
-          Revert
-        </button>
-        <span
-          className="absolute inset-0 cursor-pointer"
-          onClick={() => onToggle(r)}
-          role="button"
-          aria-label={`Revert ${r.replacement} to ${r.original}`}
-        />
+          {shown}
+        </mark>
       </span>
     )
   })
@@ -123,11 +120,12 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
   >("idle")
   const [extractMessage, setExtractMessage] = React.useState<string>("")
   const [anonymizerMessage, setAnonymizerMessage] = React.useState<string>("")
-  const [revertedByFileId, setRevertedByFileId] = React.useState<
+  const [revealedByFileId, setRevealedByFileId] = React.useState<
     Record<string, string[]>
   >({})
   const [copiedFileId, setCopiedFileId] = React.useState<string | null>(null)
   const [selectedFileKey, setSelectedFileKey] = React.useState<string | null>(null)
+  const [hover, setHover] = React.useState<HoverState>(null)
 
   const anonymizerStartedRef = React.useRef(false)
 
@@ -292,6 +290,23 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
 
   return (
     <div className="w-full max-w-6xl space-y-4 text-left">
+      {hover ? (
+        <div
+          className="fixed z-50 w-80 rounded-md border border-border bg-popover p-3 text-left text-xs text-popover-foreground shadow-md"
+          style={{
+            left: Math.min(hover.x, window.innerWidth - 340),
+            top: hover.y + 8,
+          }}
+          onMouseEnter={() => setHover(hover)}
+          onMouseLeave={() => setHover(null)}
+        >
+          <span className="mb-2 block">
+            <span className="font-medium">Original:</span>{" "}
+            <span className="font-mono">{String(hover.r.original)}</span>
+          </span>
+        </div>
+      ) : null}
+
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading files…</p>
       ) : error ? (
@@ -403,18 +418,20 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
               const replacements1 = item.model1Replacements ?? []
               const replacements2 = item.model2Replacements ?? []
               const fileKey = item.fileId ?? title
-              const revertedKeys = new Set(revertedByFileId[fileKey] ?? [])
+              const revealedKeys = new Set(revealedByFileId[fileKey] ?? [])
               const baseBody = showAnonymized ? item.model1Text! : item.extractedContent!
-              const body1 = showAnonymized
-                ? applyReverts(item.model1Text!, replacements1, revertedKeys)
+              const body1ForRender = showAnonymized ? item.model1Text! : baseBody
+              const body2ForRender = showAnonymized ? item.model2Text! : ""
+              const body1ForCopy = showAnonymized
+                ? applyReverts(item.model1Text!, replacements1, revealedKeys)
                 : baseBody
-              const body2 = showAnonymized
-                ? applyReverts(item.model2Text!, replacements2, revertedKeys)
+              const body2ForCopy = showAnonymized
+                ? applyReverts(item.model2Text!, replacements2, revealedKeys)
                 : ""
 
-              const onToggle = (r: Replacement) => {
+              const onToggleReveal = (r: Replacement) => {
                 const key = pairKey(r)
-                setRevertedByFileId((prev) => {
+                setRevealedByFileId((prev) => {
                   const cur = new Set(prev[fileKey] ?? [])
                   if (cur.has(key)) cur.delete(key)
                   else cur.add(key)
@@ -458,7 +475,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                             }
                             onClick={() => {
                               const id = `${item.fileId ?? title}:model1`
-                              void navigator.clipboard.writeText(body1)
+                              void navigator.clipboard.writeText(body1ForCopy)
                               setCopiedFileId(id)
                               window.setTimeout(() => {
                                 setCopiedFileId((cur) => (cur === id ? null : cur))
@@ -471,7 +488,13 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           </button>
                         </div>
                         <pre className="h-[70vh] overflow-auto whitespace-pre-wrap wrap-break-word rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground">
-                          {renderHighlightedText(body1, replacements1, revertedKeys, onToggle)}
+                          {renderHighlightedText(
+                            body1ForRender,
+                            replacements1,
+                            revealedKeys,
+                            setHover,
+                            onToggleReveal
+                          )}
                         </pre>
                       </div>
                       <div className="min-w-0">
@@ -489,7 +512,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                             }
                             onClick={() => {
                               const id = `${item.fileId ?? title}:model2`
-                              void navigator.clipboard.writeText(body2)
+                              void navigator.clipboard.writeText(body2ForCopy)
                               setCopiedFileId(id)
                               window.setTimeout(() => {
                                 setCopiedFileId((cur) => (cur === id ? null : cur))
@@ -502,7 +525,13 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           </button>
                         </div>
                         <pre className="h-[70vh] overflow-auto whitespace-pre-wrap wrap-break-word rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground">
-                          {renderHighlightedText(body2, replacements2, revertedKeys, onToggle)}
+                          {renderHighlightedText(
+                            body2ForRender,
+                            replacements2,
+                            revealedKeys,
+                            setHover,
+                            onToggleReveal
+                          )}
                         </pre>
                       </div>
                     </div>
