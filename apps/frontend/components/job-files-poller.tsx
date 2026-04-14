@@ -17,6 +17,20 @@ type FileItem = {
   model2At?: string
   model2Text?: string
   model2Replacements?: Array<{ original?: string; replacement?: string }>
+  evaluation?: {
+    model1: {
+      replacements: { total: number; byType: Array<{ type: string; count: number }> }
+      possibleMisses: Array<{ kind: string; match: string }>
+    }
+    model2: {
+      replacements: { total: number; byType: Array<{ type: string; count: number }> }
+      possibleMisses: Array<{ kind: string; match: string }>
+    }
+    disagreement: {
+      model1Only: Array<{ original: string; replacement: string }>
+      model2Only: Array<{ original: string; replacement: string }>
+    }
+  } | null
 }
 
 function formatWhen(iso: string | undefined): string | null {
@@ -428,6 +442,12 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
               const body2ForCopy = showAnonymized
                 ? applyReverts(item.model2Text!, replacements2, revealedKeys)
                 : ""
+              const evaluation = item.evaluation
+              const summary1 = evaluation?.model1.replacements ?? { total: 0, byType: [] }
+              const summary2 = evaluation?.model2.replacements ?? { total: 0, byType: [] }
+              const disagreement = evaluation?.disagreement ?? { model1Only: [], model2Only: [] }
+              const misses1 = evaluation?.model1.possibleMisses ?? []
+              const misses2 = evaluation?.model2.possibleMisses ?? []
 
               const onToggleReveal = (r: Replacement) => {
                 const key = pairKey(r)
@@ -459,7 +479,110 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                     {/* Copy buttons live per-model below */} 
                   </div>
                   {showAnonymized ? (
-                    <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+                    <div className="p-4">
+                      <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="text-xs font-medium text-muted-foreground">Replacements</p>
+                          <p className="mt-1 text-sm text-foreground">
+                            Model 1: <span className="font-semibold">{summary1.total}</span> · Model 2:{" "}
+                            <span className="font-semibold">{summary2.total}</span>
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="text-xs font-medium text-muted-foreground">Model disagreement</p>
+                          <p className="mt-1 text-sm text-foreground">
+                            Model 1 only:{" "}
+                            <span className="font-semibold">{disagreement.model1Only.length}</span> · Model 2 only:{" "}
+                            <span className="font-semibold">{disagreement.model2Only.length}</span>
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="text-xs font-medium text-muted-foreground">Possible misses (heuristic)</p>
+                          <p className="mt-1 text-sm text-foreground">
+                            Model 1: <span className="font-semibold">{misses1.length}</span> · Model 2:{" "}
+                            <span className="font-semibold">{misses2.length}</span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <details className="mb-4 rounded-md border border-border bg-background p-3">
+                        <summary className="cursor-pointer text-sm font-medium text-foreground">
+                          Details
+                        </summary>
+                        <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground">Model 1 counts by PII type</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {summary1.byType.length ? (
+                                summary1.byType.map((x) => (
+                                  <span
+                                    key={`m1-${x.type}`}
+                                    className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-foreground"
+                                  >
+                                    {x.type} · {x.count}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-xs text-muted-foreground">No replacements</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground">Model 2 counts by PII type</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {summary2.byType.length ? (
+                                summary2.byType.map((x) => (
+                                  <span
+                                    key={`m2-${x.type}`}
+                                    className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-foreground"
+                                  >
+                                    {x.type} · {x.count}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-xs text-muted-foreground">No replacements</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground">Possible misses (Model 1)</p>
+                            <div className="mt-2 max-h-28 overflow-auto rounded-md border border-border bg-background p-2">
+                              {misses1.length ? (
+                                <ul className="space-y-1 text-xs text-foreground">
+                                  {misses1.slice(0, 50).map((x) => (
+                                    <li key={`miss1-${x.kind}-${x.match}`}>
+                                      <span className="font-medium">{x.kind}</span>: {x.match}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-xs text-muted-foreground">No obvious patterns found</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground">Possible misses (Model 2)</p>
+                            <div className="mt-2 max-h-28 overflow-auto rounded-md border border-border bg-background p-2">
+                              {misses2.length ? (
+                                <ul className="space-y-1 text-xs text-foreground">
+                                  {misses2.slice(0, 50).map((x) => (
+                                    <li key={`miss2-${x.kind}-${x.match}`}>
+                                      <span className="font-medium">{x.kind}</span>: {x.match}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-xs text-muted-foreground">No obvious patterns found</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </details>
+
+                      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <div className="min-w-0">
                         <div className="mb-2 flex items-center justify-between gap-2">
                           <p className="text-xs font-medium text-muted-foreground">
@@ -534,6 +657,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           )}
                         </pre>
                       </div>
+                    </div>
                     </div>
                   ) : (
                     <pre className="h-[78vh] overflow-auto whitespace-pre-wrap wrap-break-word p-4 font-mono text-sm leading-relaxed text-foreground">

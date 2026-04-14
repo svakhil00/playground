@@ -2,6 +2,8 @@ import { S3FileUpload } from "@/components/s3-file-upload"
 import { JobIdRedirect } from "@/components/jobid-redirect"
 import { ThemeToggle } from "@/components/theme-toggle"
 
+const EXAMPLE_JOB_ID = "2d083f22-04cb-4ddc-af02-330ee34b6854"
+
 export default function Page() {
   return (
     <div className="relative flex min-h-svh flex-col bg-background text-foreground">
@@ -17,6 +19,14 @@ export default function Page() {
         <div className="w-full max-w-5xl">
           <S3FileUpload />
           <JobIdRedirect />
+          <div className="mt-6 flex items-center justify-center">
+            <a
+              href={`/anonymize/${EXAMPLE_JOB_ID}`}
+              className="text-sm font-medium text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              View example dataset
+            </a>
+          </div>
         </div>
       </main>
     </div>
