@@ -31,6 +31,16 @@ type FileItem = {
       model2Only: Array<{ original: string; replacement: string }>
     }
   } | null
+  review?: {
+    model1?: {
+      overrides?: Record<string, string>
+      skippedMap?: Record<string, boolean>
+    }
+    model2?: {
+      overrides?: Record<string, string>
+      skippedMap?: Record<string, boolean>
+    }
+  }
 }
 
 function formatWhen(iso: string | undefined): string | null {
@@ -62,12 +72,6 @@ function getTypeFromReplacementToken(token: string | undefined): string | null {
   const stripped = t.startsWith("[") && t.endsWith("]") ? t.slice(1, -1) : t
   const m = stripped.match(/^([A-Z_]+)_\d+$/)
   return m?.[1] ?? null
-}
-
-function isNameReplacement(r: Replacement): boolean {
-  const t = getTypeFromReplacementToken(r.replacement)
-  if (!t) return false
-  return t === "NAME" || t.endsWith("_NAME") || t.includes("NAME") || t.includes("PERSON")
 }
 
 function applyReverts(text: string, replacements: Replacement[], revertedKeys: Set<string>): string {
@@ -113,7 +117,8 @@ function renderHighlightedText(
   onHover: (next: HoverState) => void,
   onToggleReveal: (r: Replacement) => void
 ): React.ReactNode {
-  const active = replacements.filter((r) => r.replacement && r.original)
+  const active = replacements
+    .filter((r) => r.replacement && r.original)
 
   const uniq = Array.from(
     new Set(active.map((r) => r.replacement as string))
@@ -347,7 +352,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
   }, [items, jobId, fetchFiles])
 
   return (
-    <div className="w-full max-w-6xl space-y-4 text-left">
+    <div className="w-full max-w-7xl space-y-4 text-left">
       {hover ? (
         <div
           className="fixed z-50 w-80 rounded-md border border-border bg-popover p-3 text-left text-xs text-popover-foreground shadow-md"
@@ -478,7 +483,11 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
               const fileKey = item.fileId ?? title
               const focusedModel = focusedModelByFileId[fileKey] ?? "model1"
               const scopeKey = `${fileKey}:${focusedModel}`
-              const overridesByKey = overridesByFileId[scopeKey] ?? {}
+              const backendOverrides =
+                focusedModel === "model2"
+                  ? (item.review?.model2?.overrides ?? {})
+                  : (item.review?.model1?.overrides ?? {})
+              const overridesByKey = { ...backendOverrides, ...(overridesByFileId[scopeKey] ?? {}) }
               const baseBody = showAnonymized ? item.model1Text! : item.extractedContent!
               const body1ForRender = showAnonymized ? item.model1Text! : baseBody
               const body2ForRender = showAnonymized ? item.model2Text! : ""
@@ -486,8 +495,14 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
               const model2ScopeKey = `${fileKey}:model2`
               const revealedKeys1 = new Set(revealedByFileId[model1ScopeKey] ?? [])
               const revealedKeys2 = new Set(revealedByFileId[model2ScopeKey] ?? [])
-              const overridesByKey1 = overridesByFileId[model1ScopeKey] ?? {}
-              const overridesByKey2 = overridesByFileId[model2ScopeKey] ?? {}
+              const overridesByKey1 = {
+                ...(item.review?.model1?.overrides ?? {}),
+                ...(overridesByFileId[model1ScopeKey] ?? {}),
+              }
+              const overridesByKey2 = {
+                ...(item.review?.model2?.overrides ?? {}),
+                ...(overridesByFileId[model2ScopeKey] ?? {}),
+              }
               const body1ForCopy = showAnonymized
                 ? applyOverrides(
                     applyReverts(item.model1Text!, replacements1, revealedKeys1),
@@ -512,19 +527,23 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
 
               const focusedReplacements =
                 focusedModel === "model2" ? replacements2 : replacements1
-              const nameReplacements = focusedReplacements.filter(
-                (r) => r.original && r.replacement && isNameReplacement(r)
+              const reviewableReplacements = focusedReplacements.filter(
+                (r) => r.original && r.replacement
               )
-              const nameKeys = Array.from(new Set(nameReplacements.map(pairKey)))
+              const reviewKeys = Array.from(new Set(reviewableReplacements.map(pairKey)))
               const reviewIdxRaw = reviewIndexByFileId[scopeKey] ?? 0
               const reviewIdx =
-                nameKeys.length === 0
+                reviewKeys.length === 0
                   ? 0
-                  : Math.min(Math.max(reviewIdxRaw, 0), nameKeys.length - 1)
-              const activeNameKey = nameKeys[reviewIdx] ?? null
-              const activeNameReplacement =
-                activeNameKey
-                  ? (nameReplacements.find((r) => pairKey(r) === activeNameKey) ?? null)
+                  : Math.min(Math.max(reviewIdxRaw, 0), reviewKeys.length - 1)
+              const activeReviewKey = reviewKeys[reviewIdx] ?? null
+              const activeReplacement =
+                activeReviewKey
+                  ? (reviewableReplacements.find((r) => pairKey(r) === activeReviewKey) ?? null)
+                  : null
+              const activeType =
+                activeReplacement?.replacement
+                  ? (getTypeFromReplacementToken(activeReplacement.replacement) ?? "UNKNOWN")
                   : null
 
               return (
@@ -632,29 +651,36 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                       <div className="mb-4 rounded-md border border-border bg-background p-3">
                         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                           <div className="min-w-0">
-                            <p className="text-xs font-medium text-muted-foreground">Review names</p>
+                            <p className="text-xs font-medium text-muted-foreground">Review PII</p>
                             <p className="mt-1 text-sm text-foreground">
-                              {nameKeys.length ? (
+                              {reviewKeys.length ? (
                                 <>
                                   <span className="font-semibold">{reviewIdx + 1}</span> /{" "}
-                                  <span className="font-semibold">{nameKeys.length}</span>
-                                  {activeNameReplacement?.original ? (
+                                  <span className="font-semibold">{reviewKeys.length}</span>
+                                  {activeType ? (
+                                    <>
+                                      {" "}
+                                      · <span className="text-muted-foreground">type</span>{" "}
+                                      <span className="font-mono">{activeType}</span>
+                                    </>
+                                  ) : null}
+                                  {activeReplacement?.original ? (
                                     <>
                                       {" "}
                                       · <span className="text-muted-foreground">original</span>{" "}
-                                      <span className="font-mono">{activeNameReplacement.original}</span>
+                                      <span className="font-mono">{activeReplacement.original}</span>
                                     </>
                                   ) : null}
-                                  {activeNameReplacement?.replacement ? (
+                                  {activeReplacement?.replacement ? (
                                     <>
                                       {" "}
                                       · <span className="text-muted-foreground">token</span>{" "}
-                                      <span className="font-mono">{activeNameReplacement.replacement}</span>
+                                      <span className="font-mono">{activeReplacement.replacement}</span>
                                     </>
                                   ) : null}
                                 </>
                               ) : (
-                                <span className="text-muted-foreground">No name tokens detected</span>
+                                <span className="text-muted-foreground">No PII tokens detected</span>
                               )}
                             </p>
                           </div>
@@ -697,12 +723,12 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                               <button
                                 type="button"
                                 className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-                                disabled={nameKeys.length === 0}
+                                disabled={!activeReviewKey}
                                 onClick={() => {
-                                  if (nameKeys.length === 0) return
+                                  if (!activeReviewKey) return
                                   setReviewIndexByFileId((prev) => ({
                                     ...prev,
-                                    [scopeKey]: (reviewIdx - 1 + nameKeys.length) % nameKeys.length,
+                                    [scopeKey]: (reviewIdx - 1 + reviewKeys.length) % reviewKeys.length,
                                   }))
                                 }}
                               >
@@ -711,12 +737,12 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                               <button
                                 type="button"
                                 className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-                                disabled={nameKeys.length === 0}
+                                disabled={!activeReviewKey}
                                 onClick={() => {
-                                  if (nameKeys.length === 0) return
+                                  if (!activeReviewKey) return
                                   setReviewIndexByFileId((prev) => ({
                                     ...prev,
-                                    [scopeKey]: (reviewIdx + 1) % nameKeys.length,
+                                    [scopeKey]: (reviewIdx + 1) % reviewKeys.length,
                                   }))
                                 }}
                               >
@@ -728,24 +754,37 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                               <input
                                 ref={reviewInputRef}
                                 className="h-9 w-full min-w-[240px] rounded-md border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground"
-                                placeholder="Custom replacement (e.g. NAME_1 → Ethan)"
-                                disabled={!activeNameKey}
-                                value={activeNameKey ? (overridesByKey[activeNameKey] ?? "") : ""}
+                                placeholder="Custom replacement (e.g. PERSON_1 → Taylor)"
+                                disabled={!activeReviewKey}
+                                value={activeReviewKey ? (overridesByKey[activeReviewKey] ?? "") : ""}
                                 onChange={(e) => {
                                   const v = e.target.value
-                                  if (!activeNameKey) return
+                                  if (!activeReviewKey) return
+                                  const url = `/api/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(
+                                    String(item.fileId ?? "")
+                                  )}/review`
                                   setOverridesByFileId((prev) => ({
                                     ...prev,
-                                    [scopeKey]: { ...(prev[scopeKey] ?? {}), [activeNameKey]: v },
+                                    [scopeKey]: { ...(prev[scopeKey] ?? {}), [activeReviewKey]: v },
                                   }))
+                                  void fetch(url, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      model: focusedModel,
+                                      action: v.trim() ? "override" : "clearOverride",
+                                      key: activeReviewKey,
+                                      ...(v.trim() ? { value: v } : {}),
+                                    }),
+                                  })
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key !== "Enter") return
                                   e.preventDefault()
-                                  if (nameKeys.length === 0) return
+                                  if (reviewKeys.length === 0) return
                                   setReviewIndexByFileId((prev) => ({
                                     ...prev,
-                                    [scopeKey]: (reviewIdx + 1) % nameKeys.length,
+                                    [scopeKey]: (reviewIdx + 1) % reviewKeys.length,
                                   }))
                                   // Keep focus in the input so you can keep typing.
                                   window.setTimeout(() => {
@@ -757,13 +796,25 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                               <button
                                 type="button"
                                 className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-                                disabled={!activeNameKey || !overridesByKey[activeNameKey]}
+                                disabled={!activeReviewKey || !overridesByKey[activeReviewKey]}
                                 onClick={() => {
-                                  if (!activeNameKey) return
+                                  if (!activeReviewKey) return
+                                  const url = `/api/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(
+                                    String(item.fileId ?? "")
+                                  )}/review`
                                   setOverridesByFileId((prev) => {
                                     const nextFile = { ...(prev[scopeKey] ?? {}) }
-                                    delete nextFile[activeNameKey]
+                                    delete nextFile[activeReviewKey]
                                     return { ...prev, [scopeKey]: nextFile }
+                                  })
+                                  void fetch(url, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      model: focusedModel,
+                                      action: "clearOverride",
+                                      key: activeReviewKey,
+                                    }),
                                   })
                                 }}
                               >
@@ -773,7 +824,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           </div>
                         </div>
                         <p className="mt-2 text-xs text-muted-foreground">
-                          Tip: click any highlighted token to reveal the original; use this field to override the anonymized name without revealing it.
+                          Tip: click any highlighted token to reveal the original; use this field to override the anonymized token without revealing it.
                         </p>
                       </div>
 

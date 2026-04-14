@@ -22,7 +22,7 @@ export default async function AnonymizeJobPage({ params }: Props) {
       <div className="absolute top-6 right-6 z-10">
         <ThemeToggle />
       </div>
-      <div className="flex w-full max-w-6xl flex-col items-center gap-4">
+      <div className="flex w-full max-w-7xl flex-col items-center gap-4">
         <div className="w-full space-y-2 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">Job started</h1>
           <p className="text-sm text-muted-foreground">
