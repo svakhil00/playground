@@ -56,6 +56,20 @@ function pairKey(r: Replacement): string {
   return `${r.original ?? ""}→${r.replacement ?? ""}`
 }
 
+function getTypeFromReplacementToken(token: string | undefined): string | null {
+  if (!token) return null
+  const t = token.trim()
+  const stripped = t.startsWith("[") && t.endsWith("]") ? t.slice(1, -1) : t
+  const m = stripped.match(/^([A-Z_]+)_\d+$/)
+  return m?.[1] ?? null
+}
+
+function isNameReplacement(r: Replacement): boolean {
+  const t = getTypeFromReplacementToken(r.replacement)
+  if (!t) return false
+  return t === "NAME" || t.endsWith("_NAME") || t.includes("NAME") || t.includes("PERSON")
+}
+
 function applyReverts(text: string, replacements: Replacement[], revertedKeys: Set<string>): string {
   let out = text
   for (const r of replacements) {
@@ -63,6 +77,24 @@ function applyReverts(text: string, replacements: Replacement[], revertedKeys: S
     if (!revertedKeys.has(key)) continue
     if (!r.original || !r.replacement) continue
     out = out.split(r.replacement).join(r.original)
+  }
+  return out
+}
+
+function applyOverrides(
+  text: string,
+  replacements: Replacement[],
+  revealedKeys: Set<string>,
+  overridesByKey: Record<string, string>
+): string {
+  let out = text
+  for (const r of replacements) {
+    const key = pairKey(r)
+    if (revealedKeys.has(key)) continue
+    const next = overridesByKey[key]
+    if (!next) continue
+    if (!r.replacement) continue
+    out = out.split(r.replacement).join(next)
   }
   return out
 }
@@ -77,6 +109,7 @@ function renderHighlightedText(
   text: string,
   replacements: Replacement[],
   revealedKeys: Set<string>,
+  overridesByKey: Record<string, string>,
   onHover: (next: HoverState) => void,
   onToggleReveal: (r: Replacement) => void
 ): React.ReactNode {
@@ -95,7 +128,8 @@ function renderHighlightedText(
     const r = active.find((x) => x.replacement === part)
     if (!r) return <React.Fragment key={idx}>{part}</React.Fragment>
     const key = pairKey(r)
-    const shown = revealedKeys.has(key) ? (r.original ?? part) : part
+    const override = overridesByKey[key]
+    const shown = revealedKeys.has(key) ? (r.original ?? part) : (override ?? part)
     return (
       <span
         key={idx}
@@ -136,6 +170,15 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
   const [anonymizerMessage, setAnonymizerMessage] = React.useState<string>("")
   const [revealedByFileId, setRevealedByFileId] = React.useState<
     Record<string, string[]>
+  >({})
+  const [overridesByFileId, setOverridesByFileId] = React.useState<
+    Record<string, Record<string, string>>
+  >({})
+  const [reviewIndexByFileId, setReviewIndexByFileId] = React.useState<
+    Record<string, number>
+  >({})
+  const [focusedModelByFileId, setFocusedModelByFileId] = React.useState<
+    Record<string, "model1" | "model2">
   >({})
   const [copiedFileId, setCopiedFileId] = React.useState<string | null>(null)
   const [selectedFileKey, setSelectedFileKey] = React.useState<string | null>(null)
@@ -432,32 +475,56 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
               const replacements1 = item.model1Replacements ?? []
               const replacements2 = item.model2Replacements ?? []
               const fileKey = item.fileId ?? title
-              const revealedKeys = new Set(revealedByFileId[fileKey] ?? [])
+              const focusedModel = focusedModelByFileId[fileKey] ?? "model1"
+              const scopeKey = `${fileKey}:${focusedModel}`
+              const overridesByKey = overridesByFileId[scopeKey] ?? {}
               const baseBody = showAnonymized ? item.model1Text! : item.extractedContent!
               const body1ForRender = showAnonymized ? item.model1Text! : baseBody
               const body2ForRender = showAnonymized ? item.model2Text! : ""
+              const model1ScopeKey = `${fileKey}:model1`
+              const model2ScopeKey = `${fileKey}:model2`
+              const revealedKeys1 = new Set(revealedByFileId[model1ScopeKey] ?? [])
+              const revealedKeys2 = new Set(revealedByFileId[model2ScopeKey] ?? [])
+              const overridesByKey1 = overridesByFileId[model1ScopeKey] ?? {}
+              const overridesByKey2 = overridesByFileId[model2ScopeKey] ?? {}
               const body1ForCopy = showAnonymized
-                ? applyReverts(item.model1Text!, replacements1, revealedKeys)
+                ? applyOverrides(
+                    applyReverts(item.model1Text!, replacements1, revealedKeys1),
+                    replacements1,
+                    revealedKeys1,
+                    overridesByKey1
+                  )
                 : baseBody
               const body2ForCopy = showAnonymized
-                ? applyReverts(item.model2Text!, replacements2, revealedKeys)
+                ? applyOverrides(
+                    applyReverts(item.model2Text!, replacements2, revealedKeys2),
+                    replacements2,
+                    revealedKeys2,
+                    overridesByKey2
+                  )
                 : ""
               const evaluation = item.evaluation
               const summary1 = evaluation?.model1.replacements ?? { total: 0, byType: [] }
               const summary2 = evaluation?.model2.replacements ?? { total: 0, byType: [] }
-              const disagreement = evaluation?.disagreement ?? { model1Only: [], model2Only: [] }
               const misses1 = evaluation?.model1.possibleMisses ?? []
               const misses2 = evaluation?.model2.possibleMisses ?? []
 
-              const onToggleReveal = (r: Replacement) => {
-                const key = pairKey(r)
-                setRevealedByFileId((prev) => {
-                  const cur = new Set(prev[fileKey] ?? [])
-                  if (cur.has(key)) cur.delete(key)
-                  else cur.add(key)
-                  return { ...prev, [fileKey]: Array.from(cur) }
-                })
-              }
+              const focusedReplacements =
+                focusedModel === "model2" ? replacements2 : replacements1
+              const nameReplacements = focusedReplacements.filter(
+                (r) => r.original && r.replacement && isNameReplacement(r)
+              )
+              const nameKeys = Array.from(new Set(nameReplacements.map(pairKey)))
+              const reviewIdxRaw = reviewIndexByFileId[scopeKey] ?? 0
+              const reviewIdx =
+                nameKeys.length === 0
+                  ? 0
+                  : Math.min(Math.max(reviewIdxRaw, 0), nameKeys.length - 1)
+              const activeNameKey = nameKeys[reviewIdx] ?? null
+              const activeNameReplacement =
+                activeNameKey
+                  ? (nameReplacements.find((r) => pairKey(r) === activeNameKey) ?? null)
+                  : null
 
               return (
                 <section
@@ -480,38 +547,18 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                   </div>
                   {showAnonymized ? (
                     <div className="p-4">
-                      <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
-                        <div className="rounded-md border border-border bg-background p-3">
-                          <p className="text-xs font-medium text-muted-foreground">Replacements</p>
-                          <p className="mt-1 text-sm text-foreground">
-                            Model 1: <span className="font-semibold">{summary1.total}</span> · Model 2:{" "}
-                            <span className="font-semibold">{summary2.total}</span>
-                          </p>
-                        </div>
-                        <div className="rounded-md border border-border bg-background p-3">
-                          <p className="text-xs font-medium text-muted-foreground">Model disagreement</p>
-                          <p className="mt-1 text-sm text-foreground">
-                            Model 1 only:{" "}
-                            <span className="font-semibold">{disagreement.model1Only.length}</span> · Model 2 only:{" "}
-                            <span className="font-semibold">{disagreement.model2Only.length}</span>
-                          </p>
-                        </div>
-                        <div className="rounded-md border border-border bg-background p-3">
-                          <p className="text-xs font-medium text-muted-foreground">Possible misses (heuristic)</p>
-                          <p className="mt-1 text-sm text-foreground">
-                            Model 1: <span className="font-semibold">{misses1.length}</span> · Model 2:{" "}
-                            <span className="font-semibold">{misses2.length}</span>
-                          </p>
-                        </div>
-                      </div>
-
                       <details className="mb-4 rounded-md border border-border bg-background p-3">
                         <summary className="cursor-pointer text-sm font-medium text-foreground">
                           Details
                         </summary>
-                        <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-muted-foreground">Model 1 counts by PII type</p>
+                        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                          <div className="rounded-md border border-border bg-background p-3">
+                            <p className="text-xs font-medium text-muted-foreground">Model 1</p>
+                            <p className="mt-1 text-sm text-foreground">
+                              Replacements: <span className="font-semibold">{summary1.total}</span> · Possible misses:{" "}
+                              <span className="font-semibold">{misses1.length}</span>
+                            </p>
+                            <p className="mt-3 text-xs font-medium text-muted-foreground">Counts by PII type</p>
                             <div className="mt-2 flex flex-wrap gap-2">
                               {summary1.byType.length ? (
                                 summary1.byType.map((x) => (
@@ -526,29 +573,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                                 <span className="text-xs text-muted-foreground">No replacements</span>
                               )}
                             </div>
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-muted-foreground">Model 2 counts by PII type</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {summary2.byType.length ? (
-                                summary2.byType.map((x) => (
-                                  <span
-                                    key={`m2-${x.type}`}
-                                    className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-foreground"
-                                  >
-                                    {x.type} · {x.count}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="text-xs text-muted-foreground">No replacements</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-muted-foreground">Possible misses (Model 1)</p>
+                            <p className="mt-3 text-xs font-medium text-muted-foreground">Possible misses</p>
                             <div className="mt-2 max-h-28 overflow-auto rounded-md border border-border bg-background p-2">
                               {misses1.length ? (
                                 <ul className="space-y-1 text-xs text-foreground">
@@ -563,8 +588,29 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                               )}
                             </div>
                           </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-muted-foreground">Possible misses (Model 2)</p>
+
+                          <div className="rounded-md border border-border bg-background p-3">
+                            <p className="text-xs font-medium text-muted-foreground">Model 2</p>
+                            <p className="mt-1 text-sm text-foreground">
+                              Replacements: <span className="font-semibold">{summary2.total}</span> · Possible misses:{" "}
+                              <span className="font-semibold">{misses2.length}</span>
+                            </p>
+                            <p className="mt-3 text-xs font-medium text-muted-foreground">Counts by PII type</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {summary2.byType.length ? (
+                                summary2.byType.map((x) => (
+                                  <span
+                                    key={`m2-${x.type}`}
+                                    className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-foreground"
+                                  >
+                                    {x.type} · {x.count}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-xs text-muted-foreground">No replacements</span>
+                              )}
+                            </div>
+                            <p className="mt-3 text-xs font-medium text-muted-foreground">Possible misses</p>
                             <div className="mt-2 max-h-28 overflow-auto rounded-md border border-border bg-background p-2">
                               {misses2.length ? (
                                 <ul className="space-y-1 text-xs text-foreground">
@@ -581,6 +627,142 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           </div>
                         </div>
                       </details>
+
+                      <div className="mb-4 rounded-md border border-border bg-background p-3">
+                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground">Review names</p>
+                            <p className="mt-1 text-sm text-foreground">
+                              {nameKeys.length ? (
+                                <>
+                                  <span className="font-semibold">{reviewIdx + 1}</span> /{" "}
+                                  <span className="font-semibold">{nameKeys.length}</span>
+                                  {activeNameReplacement?.original ? (
+                                    <>
+                                      {" "}
+                                      · <span className="text-muted-foreground">original</span>{" "}
+                                      <span className="font-mono">{activeNameReplacement.original}</span>
+                                    </>
+                                  ) : null}
+                                  {activeNameReplacement?.replacement ? (
+                                    <>
+                                      {" "}
+                                      · <span className="text-muted-foreground">token</span>{" "}
+                                      <span className="font-mono">{activeNameReplacement.replacement}</span>
+                                    </>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <span className="text-muted-foreground">No name tokens detected</span>
+                              )}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className={
+                                  "rounded-full border px-2 py-1 text-xs font-medium " +
+                                  (focusedModel === "model1"
+                                    ? "border-primary bg-primary/10 text-foreground"
+                                    : "border-border bg-background text-muted-foreground hover:bg-muted")
+                                }
+                                onClick={() =>
+                                  setFocusedModelByFileId((prev) => ({ ...prev, [fileKey]: "model1" }))
+                                }
+                                aria-pressed={focusedModel === "model1"}
+                              >
+                                Model 1
+                              </button>
+                              <button
+                                type="button"
+                                className={
+                                  "rounded-full border px-2 py-1 text-xs font-medium " +
+                                  (focusedModel === "model2"
+                                    ? "border-primary bg-primary/10 text-foreground"
+                                    : "border-border bg-background text-muted-foreground hover:bg-muted")
+                                }
+                                onClick={() =>
+                                  setFocusedModelByFileId((prev) => ({ ...prev, [fileKey]: "model2" }))
+                                }
+                                aria-pressed={focusedModel === "model2"}
+                              >
+                                Model 2
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                                disabled={nameKeys.length === 0}
+                                onClick={() => {
+                                  if (nameKeys.length === 0) return
+                                  setReviewIndexByFileId((prev) => ({
+                                    ...prev,
+                                    [scopeKey]: (reviewIdx - 1 + nameKeys.length) % nameKeys.length,
+                                  }))
+                                }}
+                              >
+                                Previous
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                                disabled={nameKeys.length === 0}
+                                onClick={() => {
+                                  if (nameKeys.length === 0) return
+                                  setReviewIndexByFileId((prev) => ({
+                                    ...prev,
+                                    [scopeKey]: (reviewIdx + 1) % nameKeys.length,
+                                  }))
+                                }}
+                              >
+                                Next
+                              </button>
+                            </div>
+
+                            <div className="flex min-w-0 items-center gap-2">
+                              <input
+                                className="h-9 w-full min-w-[240px] rounded-md border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground"
+                                placeholder="Custom replacement (e.g. NAME_1 → Ethan)"
+                                disabled={!activeNameKey}
+                                value={activeNameKey ? (overridesByKey[activeNameKey] ?? "") : ""}
+                                onChange={(e) => {
+                                  const v = e.target.value
+                                  if (!activeNameKey) return
+                                  setOverridesByFileId((prev) => ({
+                                    ...prev,
+                                    [scopeKey]: { ...(prev[scopeKey] ?? {}), [activeNameKey]: v },
+                                  }))
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") (e.target as HTMLInputElement).blur()
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                                disabled={!activeNameKey || !overridesByKey[activeNameKey]}
+                                onClick={() => {
+                                  if (!activeNameKey) return
+                                  setOverridesByFileId((prev) => {
+                                    const nextFile = { ...(prev[scopeKey] ?? {}) }
+                                    delete nextFile[activeNameKey]
+                                    return { ...prev, [scopeKey]: nextFile }
+                                  })
+                                }}
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Tip: click any highlighted token to reveal the original; use this field to override the anonymized name without revealing it.
+                        </p>
+                      </div>
 
                       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <div className="min-w-0">
@@ -614,9 +796,19 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           {renderHighlightedText(
                             body1ForRender,
                             replacements1,
-                            revealedKeys,
+                            revealedKeys1,
+                            overridesByKey1,
                             setHover,
-                            onToggleReveal
+                            (r) => {
+                              setFocusedModelByFileId((prev) => ({ ...prev, [fileKey]: "model1" }))
+                              const key = pairKey(r)
+                              setRevealedByFileId((prev) => {
+                                const cur = new Set(prev[model1ScopeKey] ?? [])
+                                if (cur.has(key)) cur.delete(key)
+                                else cur.add(key)
+                                return { ...prev, [model1ScopeKey]: Array.from(cur) }
+                              })
+                            }
                           )}
                         </pre>
                       </div>
@@ -651,9 +843,19 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                           {renderHighlightedText(
                             body2ForRender,
                             replacements2,
-                            revealedKeys,
+                            revealedKeys2,
+                            overridesByKey2,
                             setHover,
-                            onToggleReveal
+                            (r) => {
+                              setFocusedModelByFileId((prev) => ({ ...prev, [fileKey]: "model2" }))
+                              const key = pairKey(r)
+                              setRevealedByFileId((prev) => {
+                                const cur = new Set(prev[model2ScopeKey] ?? [])
+                                if (cur.has(key)) cur.delete(key)
+                                else cur.add(key)
+                                return { ...prev, [model2ScopeKey]: Array.from(cur) }
+                              })
+                            }
                           )}
                         </pre>
                       </div>
