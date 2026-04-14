@@ -537,7 +537,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                     </div>
                   ) : (
                     <pre className="h-[78vh] overflow-auto whitespace-pre-wrap wrap-break-word p-4 font-mono text-sm leading-relaxed text-foreground">
-                      {body1}
+                      {body1ForRender}
                     </pre>
                   )}
                 </section>
