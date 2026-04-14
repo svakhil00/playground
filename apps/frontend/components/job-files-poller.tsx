@@ -183,6 +183,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
   const [copiedFileId, setCopiedFileId] = React.useState<string | null>(null)
   const [selectedFileKey, setSelectedFileKey] = React.useState<string | null>(null)
   const [hover, setHover] = React.useState<HoverState>(null)
+  const reviewInputRef = React.useRef<HTMLInputElement | null>(null)
 
   const anonymizerStartedRef = React.useRef(false)
 
@@ -725,6 +726,7 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
 
                             <div className="flex min-w-0 items-center gap-2">
                               <input
+                                ref={reviewInputRef}
                                 className="h-9 w-full min-w-[240px] rounded-md border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground"
                                 placeholder="Custom replacement (e.g. NAME_1 → Ethan)"
                                 disabled={!activeNameKey}
@@ -738,7 +740,18 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
                                   }))
                                 }}
                                 onKeyDown={(e) => {
-                                  if (e.key === "Enter") (e.target as HTMLInputElement).blur()
+                                  if (e.key !== "Enter") return
+                                  e.preventDefault()
+                                  if (nameKeys.length === 0) return
+                                  setReviewIndexByFileId((prev) => ({
+                                    ...prev,
+                                    [scopeKey]: (reviewIdx + 1) % nameKeys.length,
+                                  }))
+                                  // Keep focus in the input so you can keep typing.
+                                  window.setTimeout(() => {
+                                    reviewInputRef.current?.focus()
+                                    reviewInputRef.current?.select()
+                                  }, 0)
                                 }}
                               />
                               <button
