@@ -16,7 +16,8 @@
     "S3_UPLOAD_PREFIX",
     "S3_ALLOWED_CONTENT_TYPES",
     "S3_ENDPOINT",
-    "S3_FORCE_PATH_STYLE"
+    "S3_FORCE_PATH_STYLE",
+    "ANONYMIZER_LAMBDA_FUNCTION_NAME"
   ],
   "tasks": {
     "build": {

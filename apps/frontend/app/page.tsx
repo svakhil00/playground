@@ -1,4 +1,5 @@
 import { S3FileUpload } from "@/components/s3-file-upload"
+import { JobIdRedirect } from "@/components/jobid-redirect"
 import { ThemeToggle } from "@/components/theme-toggle"
 
 export default function Page() {
@@ -12,9 +13,10 @@ export default function Page() {
           Anonymizer
         </h1>
       </header>
-      <main className="flex flex-1 flex-row items-center justify-center px-6 pb-16">
-        <div className="w-full max-w-md shrink-0">
+      <main className="flex flex-1 flex-row items-start justify-center px-6 pb-16">
+        <div className="w-full max-w-5xl">
           <S3FileUpload />
+          <JobIdRedirect />
         </div>
       </main>
     </div>

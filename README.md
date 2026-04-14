@@ -23,3 +23,7 @@ Each uploaded file is stored as its own item. Original content and anonymized ch
 | -------------- | --------- |
 | Partition key  | `jobId`   |
 | Sort key       | `fileId`  |
+
+## Improvements (deferred)
+
+- Job/file **status** values (`uploaded`, `extracted`, `anonymized`, etc.) are not centralized in a single shared definition; skipped to save time.

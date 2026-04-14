@@ -49,6 +49,29 @@ Resources:
             Path: /anonymize
             Method: post
 
+  Model2Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: model2/
+      Handler: app.lambda_handler
+      Runtime: python3.14
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 512
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - comprehend:DetectPiiEntities
+              Resource: "*"
+      Events:
+        Model2Api:
+          Type: Api
+          Properties:
+            Path: /model2
+            Method: post
+
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM
@@ -71,3 +94,12 @@ Outputs:
   AnonymizerFunctionIamRole:
     Description: "Implicit IAM Role created for Anonymizer function"
     Value: !GetAtt AnonymizerFunctionRole.Arn
+  Model2Api:
+    Description: "API Gateway POST /model2 for Model2 function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/model2"
+  Model2Function:
+    Description: "Model2 Lambda Function ARN"
+    Value: !GetAtt Model2Function.Arn
+  Model2FunctionIamRole:
+    Description: "Implicit IAM Role created for Model2 function"
+    Value: !GetAtt Model2FunctionRole.Arn

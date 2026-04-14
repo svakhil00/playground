@@ -11,6 +11,104 @@ type FileItem = {
   createdAt?: string
   extractedContent?: string
   extractedAt?: string
+  model1At?: string
+  model1Text?: string
+  model1Replacements?: Array<{ original?: string; replacement?: string }>
+  model2At?: string
+  model2Text?: string
+  model2Replacements?: Array<{ original?: string; replacement?: string }>
+}
+
+function formatWhen(iso: string | undefined): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d)
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+type Replacement = { original?: string; replacement?: string }
+
+function pairKey(r: Replacement): string {
+  return `${r.original ?? ""}→${r.replacement ?? ""}`
+}
+
+function applyReverts(text: string, replacements: Replacement[], revertedKeys: Set<string>): string {
+  let out = text
+  for (const r of replacements) {
+    const key = pairKey(r)
+    if (!revertedKeys.has(key)) continue
+    if (!r.original || !r.replacement) continue
+    out = out.split(r.replacement).join(r.original)
+  }
+  return out
+}
+
+function renderHighlightedText(
+  text: string,
+  replacements: Replacement[],
+  revertedKeys: Set<string>,
+  onToggle: (r: Replacement) => void
+): React.ReactNode {
+  const active = replacements
+    .filter((r) => r.replacement && r.original)
+    .filter((r) => !revertedKeys.has(pairKey(r)))
+
+  const uniq = Array.from(
+    new Set(active.map((r) => r.replacement as string))
+  ).sort((a, b) => b.length - a.length)
+
+  if (uniq.length === 0) return text
+
+  const re = new RegExp(`(${uniq.map(escapeRegExp).join("|")})`, "g")
+  const parts = text.split(re)
+
+  return parts.map((part, idx) => {
+    const r = active.find((x) => x.replacement === part)
+    if (!r) return <React.Fragment key={idx}>{part}</React.Fragment>
+    return (
+      <span key={idx} className="group relative">
+        <mark className="rounded-sm bg-yellow-200 px-0.5 text-foreground dark:bg-yellow-500/30">
+          {part}
+        </mark>
+        <span className="pointer-events-none absolute left-0 top-full z-10 mt-2 hidden w-72 rounded-md border border-border bg-popover p-3 text-left text-xs text-popover-foreground shadow-md group-hover:block">
+          <span className="mb-2 block">
+            <span className="font-medium">Original:</span>{" "}
+            <span className="font-mono">{String(r.original)}</span>
+          </span>
+          <span className="mb-3 block">
+            <span className="font-medium">Replacement:</span>{" "}
+            <span className="font-mono">{String(r.replacement)}</span>
+          </span>
+          <span className="block text-[11px] text-muted-foreground">
+            Click to revert this token.
+          </span>
+        </span>
+        <button
+          type="button"
+          className="sr-only"
+          onClick={() => onToggle(r)}
+        >
+          Revert
+        </button>
+        <span
+          className="absolute inset-0 cursor-pointer"
+          onClick={() => onToggle(r)}
+          role="button"
+          aria-label={`Revert ${r.replacement} to ${r.original}`}
+        />
+      </span>
+    )
+  })
 }
 
 export function JobFilesPoller({ jobId }: { jobId: string }) {
@@ -20,7 +118,49 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
   const [extractState, setExtractState] = React.useState<
     "idle" | "starting" | "done" | "error"
   >("idle")
+  const [anonymizerState, setAnonymizerState] = React.useState<
+    "idle" | "starting" | "done" | "error"
+  >("idle")
   const [extractMessage, setExtractMessage] = React.useState<string>("")
+  const [anonymizerMessage, setAnonymizerMessage] = React.useState<string>("")
+  const [revertedByFileId, setRevertedByFileId] = React.useState<
+    Record<string, string[]>
+  >({})
+  const [copiedFileId, setCopiedFileId] = React.useState<string | null>(null)
+  const [selectedFileKey, setSelectedFileKey] = React.useState<string | null>(null)
+
+  const anonymizerStartedRef = React.useRef(false)
+
+  React.useEffect(() => {
+    anonymizerStartedRef.current = false
+    setSelectedFileKey(null)
+  }, [jobId])
+
+  React.useEffect(() => {
+    if (items.length === 0) return
+    const keys = items.map((it) => it.fileId ?? it.fileName ?? "")
+    if (selectedFileKey && keys.includes(selectedFileKey)) return
+    // Default to the first file that has something to show (anonymized > extracted > anything).
+    let best: FileItem = items[0]!
+    const anonymized = items.find(
+      (it) =>
+        (it.status ?? "").toLowerCase() === "anonymized" &&
+        typeof it.model1Text === "string" &&
+        it.model1Text.trim() !== ""
+    )
+    if (anonymized) best = anonymized
+    const extracted =
+      anonymized ??
+      items.find(
+        (it) =>
+          (it.status ?? "").toLowerCase() === "extracted" &&
+          typeof it.extractedContent === "string" &&
+          it.extractedContent.trim() !== ""
+      )
+    if (extracted) best = extracted
+
+    setSelectedFileKey(best.fileId ?? best.fileName ?? null)
+  }, [items, selectedFileKey])
 
   const fetchFiles = React.useCallback(async () => {
     try {
@@ -94,7 +234,6 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
           return
         }
         setExtractState("done")
-        setExtractMessage("Extract complete.")
         await fetchFiles()
       } catch {
         setExtractState("error")
@@ -103,12 +242,56 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
     })()
   }, [items, jobId, extractState, fetchFiles])
 
-  return (
-    <div className="w-full max-w-md space-y-3 text-left">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-medium text-foreground">Files for this job</h2>
-      </div>
+  /** After every file is `extracted` with content, invoke the Python anonymizer Lambda once. */
+  React.useEffect(() => {
+    if (anonymizerStartedRef.current) return
+    if (!items.length) return
+    const allExtracted = items.every(
+      (it) => (it.status ?? "").toLowerCase() === "extracted"
+    )
+    if (!allExtracted) return
+    const allHaveContent = items.every(
+      (it) => typeof it.extractedContent === "string" && it.extractedContent.trim() !== ""
+    )
+    if (!allHaveContent) return
+    const anyPendingAnonymizer = items.some((it) => !it.model1At || !it.model2At)
+    if (!anyPendingAnonymizer) return
 
+    anonymizerStartedRef.current = true
+    setAnonymizerState("starting")
+    setAnonymizerMessage("Running anonymizer…")
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/jobs/${encodeURIComponent(jobId)}/invoke-anonymizer`,
+          { method: "POST" }
+        )
+        const data: unknown = await res.json().catch(() => ({}))
+        const payload = data as { ok?: boolean; error?: string; results?: unknown }
+        if (!res.ok || payload.ok === false) {
+          anonymizerStartedRef.current = false
+          setAnonymizerState("error")
+          setAnonymizerMessage(
+            typeof payload.error === "string"
+              ? payload.error
+              : !res.ok
+                ? `Anonymizer failed (${res.status})`
+                : "One or more files failed anonymization"
+          )
+          return
+        }
+        setAnonymizerState("done")
+        await fetchFiles()
+      } catch {
+        anonymizerStartedRef.current = false
+        setAnonymizerState("error")
+        setAnonymizerMessage("Anonymizer failed (network error).")
+      }
+    })()
+  }, [items, jobId, fetchFiles])
+
+  return (
+    <div className="w-full max-w-6xl space-y-4 text-left">
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading files…</p>
       ) : error ? (
@@ -125,8 +308,13 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
           {extractMessage}
         </p>
       ) : null}
-      {!loading && !error && extractState === "done" ? (
-        <p className="text-sm text-muted-foreground">{extractMessage}</p>
+      {!loading && !error && anonymizerState === "starting" ? (
+        <p className="text-sm text-muted-foreground">{anonymizerMessage}</p>
+      ) : null}
+      {!loading && !error && anonymizerState === "error" ? (
+        <p className="text-sm text-destructive" role="alert">
+          {anonymizerMessage}
+        </p>
       ) : null}
 
       {!loading && !error && items.length === 0 ? (
@@ -134,49 +322,200 @@ export function JobFilesPoller({ jobId }: { jobId: string }) {
       ) : null}
 
       {!loading && !error && items.length > 0 ? (
-        <ul className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
-          {items.map((item) => (
-            <li
-              key={`${item.fileId ?? "file"}-${item.createdAt ?? ""}`}
-              className="border-b border-border pb-2 last:border-0 last:pb-0"
-            >
-              <p
-                className="truncate text-sm font-medium text-foreground"
-                title={item.fileName}
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[220px_1fr]">
+          <ul className="max-h-[78vh] overflow-auto space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+            {items.map((item) => (
+              <li
+                key={`${item.fileId ?? "file"}-${item.createdAt ?? ""}`}
+                className={
+                  "rounded-md border p-3 " +
+                  ((item.fileId ?? item.fileName ?? "") === selectedFileKey
+                    ? "border-primary bg-primary/5"
+                    : "border-border bg-background hover:bg-muted/30")
+                }
               >
-                {item.fileName ?? item.fileId ?? "—"}
-              </p>
-              <p className="truncate font-mono text-xs text-muted-foreground" title={item.fileId}>
-                {item.fileId ?? "—"}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {item.status ?? "—"}
-                {item.createdAt ? ` · ${item.createdAt}` : null}
-                {item.extractedAt ? ` · extracted ${item.extractedAt}` : null}
-              </p>
-              {item.fileUrl ? (
-                <p
-                  className="truncate font-mono text-[11px] text-muted-foreground"
-                  title={item.fileUrl}
+                <button
+                  type="button"
+                  className="w-full text-left"
+                  onClick={() =>
+                    setSelectedFileKey(item.fileId ?? item.fileName ?? null)
+                  }
                 >
-                  {item.fileUrl}
-                </p>
-              ) : null}
-              {(item.status ?? "").toLowerCase() === "extracted" &&
-              item.extractedContent !== undefined &&
-              item.extractedContent !== "" ? (
-                <div className="mt-2 rounded-md border border-border bg-background p-2">
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Extracted content
+                  <p
+                    className="truncate text-sm font-medium text-foreground"
+                    title={item.fileName}
+                  >
+                    {item.fileName ?? item.fileId ?? "—"}
                   </p>
-                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs text-foreground">
-                    {item.extractedContent}
-                  </pre>
-                </div>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+                  <p className="text-xs text-muted-foreground">
+                    {item.status ?? "—"}
+                    {item.createdAt
+                      ? ` · uploaded ${formatWhen(item.createdAt) ?? item.createdAt}`
+                      : null}
+                  </p>
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <div className="space-y-4">
+            {items
+              .filter(
+                (it) => (it.fileId ?? it.fileName ?? "") === selectedFileKey
+              )
+              .map((item) => {
+              const status = (item.status ?? "").toLowerCase()
+              const showExtracted =
+                status === "extracted" &&
+                typeof item.extractedContent === "string" &&
+                item.extractedContent.trim() !== ""
+              const showAnonymized =
+                status === "anonymized" &&
+                typeof item.model1Text === "string" &&
+                item.model1Text.trim() !== "" &&
+                typeof item.model2Text === "string" &&
+                item.model2Text.trim() !== ""
+
+              if (!showExtracted && !showAnonymized) {
+                return (
+                  <section
+                    key={`content-${item.fileId ?? item.fileName ?? "file"}`}
+                    className="rounded-lg border border-border bg-background"
+                  >
+                    <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {item.fileName ?? item.fileId ?? "—"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          No extracted/anonymized content yet.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="p-4 text-sm text-muted-foreground">
+                      Waiting for processing…
+                    </div>
+                  </section>
+                )
+              }
+
+              const title = item.fileName ?? item.fileId ?? "—"
+              const replacements1 = item.model1Replacements ?? []
+              const replacements2 = item.model2Replacements ?? []
+              const fileKey = item.fileId ?? title
+              const revertedKeys = new Set(revertedByFileId[fileKey] ?? [])
+              const baseBody = showAnonymized ? item.model1Text! : item.extractedContent!
+              const body1 = showAnonymized
+                ? applyReverts(item.model1Text!, replacements1, revertedKeys)
+                : baseBody
+              const body2 = showAnonymized
+                ? applyReverts(item.model2Text!, replacements2, revertedKeys)
+                : ""
+
+              const onToggle = (r: Replacement) => {
+                const key = pairKey(r)
+                setRevertedByFileId((prev) => {
+                  const cur = new Set(prev[fileKey] ?? [])
+                  if (cur.has(key)) cur.delete(key)
+                  else cur.add(key)
+                  return { ...prev, [fileKey]: Array.from(cur) }
+                })
+              }
+
+              return (
+                <section
+                  key={`content-${item.fileId ?? title}`}
+                  className="rounded-lg border border-border bg-background"
+                >
+                  <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <p className="truncate text-sm font-medium text-foreground">{title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {showAnonymized ? "Models complete" : "Extracted text"}
+                      {item.extractedAt
+                        ? ` · extracted ${formatWhen(item.extractedAt) ?? item.extractedAt}`
+                        : null}
+                      {item.model1At ? ` · model 1 ${formatWhen(item.model1At) ?? item.model1At}` : null}
+                      {item.model2At ? ` · model 2 ${formatWhen(item.model2At) ?? item.model2At}` : null}
+                    </p>
+                    </div>
+                    {/* Copy buttons live per-model below */} 
+                  </div>
+                  {showAnonymized ? (
+                    <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+                      <div className="min-w-0">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Model 1
+                          </p>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted"
+                            title={
+                              copiedFileId === `${item.fileId ?? title}:model1`
+                                ? "Copied"
+                                : "Copy model 1"
+                            }
+                            onClick={() => {
+                              const id = `${item.fileId ?? title}:model1`
+                              void navigator.clipboard.writeText(body1)
+                              setCopiedFileId(id)
+                              window.setTimeout(() => {
+                                setCopiedFileId((cur) => (cur === id ? null : cur))
+                              }, 1200)
+                            }}
+                          >
+                            {copiedFileId === `${item.fileId ?? title}:model1`
+                              ? "Copied"
+                              : "Copy"}
+                          </button>
+                        </div>
+                        <pre className="h-[70vh] overflow-auto whitespace-pre-wrap wrap-break-word rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground">
+                          {renderHighlightedText(body1, replacements1, revertedKeys, onToggle)}
+                        </pre>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Model 2
+                          </p>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted"
+                            title={
+                              copiedFileId === `${item.fileId ?? title}:model2`
+                                ? "Copied"
+                                : "Copy model 2"
+                            }
+                            onClick={() => {
+                              const id = `${item.fileId ?? title}:model2`
+                              void navigator.clipboard.writeText(body2)
+                              setCopiedFileId(id)
+                              window.setTimeout(() => {
+                                setCopiedFileId((cur) => (cur === id ? null : cur))
+                              }, 1200)
+                            }}
+                          >
+                            {copiedFileId === `${item.fileId ?? title}:model2`
+                              ? "Copied"
+                              : "Copy"}
+                          </button>
+                        </div>
+                        <pre className="h-[70vh] overflow-auto whitespace-pre-wrap wrap-break-word rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground">
+                          {renderHighlightedText(body2, replacements2, revertedKeys, onToggle)}
+                        </pre>
+                      </div>
+                    </div>
+                  ) : (
+                    <pre className="h-[78vh] overflow-auto whitespace-pre-wrap wrap-break-word p-4 font-mono text-sm leading-relaxed text-foreground">
+                      {body1}
+                    </pre>
+                  )}
+                </section>
+              )
+            })}
+          </div>
+        </div>
       ) : null}
     </div>
   )
